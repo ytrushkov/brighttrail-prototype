@@ -102,8 +102,7 @@ export async function GET(request: NextRequest) {
         );
 
     // 5. Generate Slots
-    // If detailed=true: result = { "YYYY-MM-DD": [ { time: 123, therapistIds: [1, 2] }, ... ] }
-    // Else: result = { "YYYY-MM-DD": [ 123, 124, ... ] }
+    // Using ISO strings to enforce "Floating" time semantics (Clinic Time)
     const result: Record<string, any[]> = {};
 
     for (const dateObj of datesToCheck) {
@@ -114,9 +113,9 @@ export async function GET(request: NextRequest) {
 
         const dayOfWeek = dateObj.getDay(); // 0-6
 
-        // Map time -> Set of therapist IDs (for detailed view)
-        const slotsMap = new Map<number, Set<number>>();
-        const simpleSlots = new Set<number>();
+        // Map ISO Time String -> Set of therapist IDs
+        const slotsMap = new Map<string, Set<number>>();
+        const simpleSlots = new Set<string>();
 
         for (const therapistId of therapistIds) {
             const therapistShifts = shifts.filter(
@@ -134,9 +133,17 @@ export async function GET(request: NextRequest) {
 
             for (const shift of therapistShifts) {
                 for (let time = shift.startTime; time + serviceDurationMins <= shift.endTime; time += 30) {
-                    const slotDate = new Date(dateObj);
-                    slotDate.setHours(Math.floor(time / 60), time % 60, 0, 0);
-                    const slotTimestamp = Math.floor(slotDate.getTime() / 1000);
+                    // Construct UTC date corresponding to this clinic time
+                    // year, monthIndex, day, hours, minutes
+                    const slotDateUTC = new Date(Date.UTC(year, Number(month) - 1, Number(day), Math.floor(time / 60), time % 60, 0, 0));
+
+                    // Timestamp (UTC)
+                    const slotTimestamp = Math.floor(slotDateUTC.getTime() / 1000);
+
+                    // ISO String (e.g., "2025-11-24T09:00:00.000Z")
+                    // We will return this. The 'Z' indicates UTC.
+                    const isoString = slotDateUTC.toISOString();
+
                     const slotEndTimestamp = slotTimestamp + (serviceDurationMins * 60);
 
                     const isBlocked = therapistAppts.some(appt => {
@@ -147,12 +154,12 @@ export async function GET(request: NextRequest) {
 
                     if (!isBlocked) {
                         if (isDetailed) {
-                            if (!slotsMap.has(slotTimestamp)) {
-                                slotsMap.set(slotTimestamp, new Set());
+                            if (!slotsMap.has(isoString)) {
+                                slotsMap.set(isoString, new Set());
                             }
-                            slotsMap.get(slotTimestamp)!.add(therapistId);
+                            slotsMap.get(isoString)!.add(therapistId);
                         } else {
-                            simpleSlots.add(slotTimestamp);
+                            simpleSlots.add(isoString);
                         }
                     }
                 }
@@ -160,14 +167,13 @@ export async function GET(request: NextRequest) {
         }
 
         if (isDetailed) {
-            // Convert Map to sorted array of objects
-            const sortedTimes = Array.from(slotsMap.keys()).sort((a, b) => a - b);
+            const sortedTimes = Array.from(slotsMap.keys()).sort();
             result[dateString] = sortedTimes.map(time => ({
-                time,
+                time, // ISO String
                 therapistIds: Array.from(slotsMap.get(time)!)
             }));
         } else {
-            result[dateString] = Array.from(simpleSlots).sort((a, b) => a - b);
+            result[dateString] = Array.from(simpleSlots).sort();
         }
     }
 
