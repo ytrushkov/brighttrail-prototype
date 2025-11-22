@@ -1,10 +1,9 @@
 "use client"
 
 import * as React from "react"
-import { format, addDays } from "date-fns"
-import { Calendar as CalendarIcon, Check, Clock, User } from "lucide-react"
+import { format } from "date-fns"
+import { Calendar as CalendarIcon, User } from "lucide-react"
 
-import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -23,11 +22,6 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Calendar } from "@/components/ui/calendar"
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useToast } from "@/components/ui/use-toast"
 
@@ -56,7 +50,7 @@ export function BookingWizard({ locationId, onSuccess }: BookingWizardProps) {
   const [selectedService, setSelectedService] = React.useState<Service | null>(null)
   const [selectedTherapistId, setSelectedTherapistId] = React.useState<string>("any") // "any" or ID
   const [date, setDate] = React.useState<Date | undefined>(new Date())
-  const [selectedSlotTime, setSelectedSlotTime] = React.useState<number | null>(null)
+  const [selectedSlotIso, setSelectedSlotIso] = React.useState<string | null>(null)
   const [finalTherapistId, setFinalTherapistId] = React.useState<number | null>(null)
 
   // Data State
@@ -73,11 +67,10 @@ export function BookingWizard({ locationId, onSuccess }: BookingWizardProps) {
       setSelectedService(null)
       setSelectedTherapistId("any")
       setDate(new Date())
-      setSelectedSlotTime(null)
+      setSelectedSlotIso(null)
       setFinalTherapistId(null)
       setSlots([])
       fetchServices().then(setServices).catch(console.error)
-      // Mock fetching a patient ID for the booking (in real app, auth user)
       fetchAppointments().then(appts => {
          if (appts.length > 0) setPatientId(appts[0].patientId);
          else setPatientId(4); // Fallback to ID 4 (from seed)
@@ -105,8 +98,7 @@ export function BookingWizard({ locationId, onSuccess }: BookingWizardProps) {
 
       fetchSlots(locationId, selectedService.id, dateStr, tId, true) // Request detailed slots
         .then((data) => {
-          // data is Record<date, SlotDetailed[]>
-          // We match the keys. Note: key is local date string.
+          // data is Record<date, SlotDetailed[]> (now SlotDetailed has string time)
           const dayKey = format(date, "yyyy-MM-dd")
           const dailySlots = (data[dayKey] || []) as SlotDetailed[]
           setSlots(dailySlots)
@@ -127,29 +119,16 @@ export function BookingWizard({ locationId, onSuccess }: BookingWizardProps) {
   }
 
   const handleSlotSelect = (slot: SlotDetailed) => {
-    setSelectedSlotTime(slot.time)
+    setSelectedSlotIso(slot.time)
 
     if (selectedTherapistId !== "any") {
         setFinalTherapistId(Number(selectedTherapistId))
         setStep(4) // Go to confirm
     } else {
-        // "Any" logic: If multiple therapists available, we just pick the first one for simplicity
-        // OR let user pick. The prompt says: "let the user pick the specific provider *after* clicking a time slot"
-        // So we need an intermediate step or a dialog.
-        // Simplest UI: When clicking the slot, if "Any" was active, pop a small list or just auto-assign?
-        // Prompt: "let the user pick the specific provider... if 'Any' was used"
-        // I'll implement a small "Pick Provider" overlay or state change.
-
         if (slot.therapistIds.length === 1) {
              setFinalTherapistId(slot.therapistIds[0]);
              setStep(4);
         } else {
-             // We need to show a selection of these therapists
-             // Let's filter the `therapists` list by `slot.therapistIds`
-             // and show them.
-             // I'll repurpose Step 3's view or use a "sub-step" 3.5
-             // For now, let's just confirm the slot and allow picking form the list in a modal or similar.
-             // Easier: Set a temporary state "pickingProviderForSlot"
              setPickingProviderForSlot(slot);
         }
     }
@@ -164,12 +143,15 @@ export function BookingWizard({ locationId, onSuccess }: BookingWizardProps) {
   }
 
   const handleConfirm = async () => {
-    if (!selectedService || !selectedSlotTime || !finalTherapistId || !patientId) return
+    if (!selectedService || !selectedSlotIso || !finalTherapistId || !patientId) return
 
     setLoading(true)
     try {
+      // Convert ISO string (UTC) back to Timestamp for DB
+      const timestamp = Math.floor(new Date(selectedSlotIso).getTime() / 1000);
+
       await createAppointment({
-        datetime: selectedSlotTime,
+        datetime: timestamp,
         duration_mins: selectedService.durationMins,
         patient_id: patientId, // Mock patient
         therapist_id: finalTherapistId,
@@ -210,7 +192,7 @@ export function BookingWizard({ locationId, onSuccess }: BookingWizardProps) {
           <SelectTrigger>
             <SelectValue placeholder="Select a therapist" />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent className="z-[100]">
             <SelectItem value="any" className="font-semibold">Any Available Therapist</SelectItem>
             {therapists.map(t => (
               <SelectItem key={t.id} value={t.id.toString()}>{t.name} ({t.role})</SelectItem>
@@ -243,19 +225,17 @@ export function BookingWizard({ locationId, onSuccess }: BookingWizardProps) {
         ) : (
             <div className="grid grid-cols-3 gap-2 max-h-[200px] overflow-y-auto pr-2">
             {slots.map((slot, idx) => {
-                const timeStr = format(new Date(slot.time * 1000), "h:mm a");
-                // If "Any", we can show who is inside.
-                // If specific, we just show time.
-                let label = timeStr;
-                if (selectedTherapistId === "any") {
-                     // Find therapist names? We have `therapists` list.
-                     const names = slot.therapistIds.map(id => therapists.find(t => t.id === id)?.name.split(' ')[1]).join(', '); // Just last names or short
-                     // Too long? Just show count?
-                     // Prompt says: "Display the available therapists inside the slot button"
-                     // Let's try names.
-                     label = `${timeStr}`; // Keeping it clean, maybe show detail on hover or subtext?
-                     // Actually, let's do multi-line button
-                }
+                // Parse ISO (UTC). We want to display UTC time as if it were local 9 AM.
+                // slot.time = "2025-11-24T09:00:00.000Z"
+                // If we just do `new Date(slot.time)`, browser converts to Local (e.g. 1 AM PST).
+                // We want to display "9:00 AM".
+                // So we must format the UTC components.
+                const d = new Date(slot.time);
+                const hours = d.getUTCHours();
+                const mins = d.getUTCMinutes();
+                const ampm = hours >= 12 ? 'PM' : 'AM';
+                const hours12 = hours % 12 || 12;
+                const timeStr = `${hours12}:${mins.toString().padStart(2, '0')} ${ampm}`;
 
                 return (
                     <Button key={idx} variant="outline" className="h-auto py-2 flex flex-col gap-1" onClick={() => handleSlotSelect(slot)}>
@@ -278,7 +258,7 @@ export function BookingWizard({ locationId, onSuccess }: BookingWizardProps) {
               <Card className="w-[300px]">
                   <CardHeader>
                       <CardTitle>Select Provider</CardTitle>
-                      <DialogDescription>Who would you like for {format(new Date(pickingProviderForSlot.time * 1000), "h:mm a")}?</DialogDescription>
+                      <DialogDescription>Who would you like for this slot?</DialogDescription>
                   </CardHeader>
                   <CardContent className="flex flex-col gap-2">
                       {pickingProviderForSlot.therapistIds.map(tid => {
@@ -302,7 +282,21 @@ export function BookingWizard({ locationId, onSuccess }: BookingWizardProps) {
 
   const renderStep4 = () => {
       const tName = therapists.find(t => t.id === finalTherapistId)?.name;
-      const dateStr = selectedSlotTime ? format(new Date(selectedSlotTime * 1000), "PPP 'at' h:mm a") : '';
+      // Formatting the ISO (UTC) string for display
+      let dateStr = '';
+      if (selectedSlotIso) {
+          const d = new Date(selectedSlotIso);
+          // Format explicitly using UTC parts to ensure "9:00 AM" shows as "9:00 AM" regardless of browser TZ
+          const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+          const month = months[d.getUTCMonth()];
+          const day = d.getUTCDate();
+          const year = d.getUTCFullYear();
+          const hours = d.getUTCHours();
+          const mins = d.getUTCMinutes();
+          const ampm = hours >= 12 ? 'PM' : 'AM';
+          const hours12 = hours % 12 || 12;
+          dateStr = `${month} ${day}, ${year} at ${hours12}:${mins.toString().padStart(2, '0')} ${ampm}`;
+      }
 
       return (
         <div className="space-y-4">

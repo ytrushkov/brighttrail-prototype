@@ -36,7 +36,7 @@ export type Appointment = {
 
 // Detailed slot response
 export type SlotDetailed = {
-  time: number;
+  time: string; // ISO String (UTC)
   therapistIds: number[];
 };
 
@@ -73,7 +73,7 @@ export async function fetchSlots(
   dateStr: string,
   therapistId?: number | null,
   detailed: boolean = false
-): Promise<Record<string, number[] | SlotDetailed[]>> {
+): Promise<Record<string, string[] | SlotDetailed[]>> {
   const params = new URLSearchParams({
     location_id: locationId.toString(),
     service_id: serviceId.toString(),

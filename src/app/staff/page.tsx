@@ -29,7 +29,7 @@ import { cn } from "@/lib/utils"
 export default function StaffPortal() {
   const [locations, setLocations] = React.useState<Location[]>([])
   const [selectedLocationId, setSelectedLocationId] = React.useState<string>("")
-  const [date, setDate] = React.useState<Date>(startOfToday())
+  const [date, setDate] = React.useState<Date | undefined>(undefined)
 
   // Grid Data
   const [therapists, setTherapists] = React.useState<Therapist[]>([])
@@ -37,6 +37,11 @@ export default function StaffPortal() {
 
   // Loading
   const [loading, setLoading] = React.useState(false)
+
+  // Hydration fix: Set date on mount
+  React.useEffect(() => {
+      setDate(startOfToday());
+  }, []);
 
   // Init
   React.useEffect(() => {
@@ -47,14 +52,14 @@ export default function StaffPortal() {
   }, [])
 
   const refreshData = React.useCallback(() => {
-      if (!selectedLocationId) return;
+      if (!selectedLocationId || !date) return;
 
       setLoading(true);
       const locId = Number(selectedLocationId);
 
       Promise.all([
           fetchTherapists(locId),
-          fetchAppointments() // In a real app, we'd filter by date range and location via API
+          fetchAppointments()
       ]).then(([therapistsData, apptsData]) => {
           setTherapists(therapistsData);
           // Client side filter for prototype
@@ -113,7 +118,7 @@ export default function StaffPortal() {
 
       {/* Date Controls */}
       <div className="flex items-center justify-between border rounded-lg p-2 bg-card shadow-sm">
-        <Button variant="ghost" size="icon" onClick={() => setDate(prev => addDays(prev, -1))}>
+        <Button variant="ghost" size="icon" onClick={() => setDate(prev => prev ? addDays(prev, -1) : prev)}>
             <ChevronLeft className="h-4 w-4" />
         </Button>
 
@@ -129,7 +134,7 @@ export default function StaffPortal() {
             </PopoverContent>
         </Popover>
 
-        <Button variant="ghost" size="icon" onClick={() => setDate(prev => addDays(prev, 1))}>
+        <Button variant="ghost" size="icon" onClick={() => setDate(prev => prev ? addDays(prev, 1) : prev)}>
             <ChevronRight className="h-4 w-4" />
         </Button>
       </div>
@@ -176,9 +181,10 @@ export default function StaffPortal() {
                             {appointments
                                 .filter(a => a.therapistId === therapist.id)
                                 .map(appt => {
-                                    // Calculate Position
+                                    // Calculate Position using UTC to align with API/DB UTC storage
+                                    // If DB stores UTC timestamps, and we want to show them in "Clinic Time" (assumed UTC here for prototype consistency)
                                     const apptDate = new Date(appt.datetime * 1000);
-                                    const startMins = apptDate.getHours() * 60 + apptDate.getMinutes();
+                                    const startMins = apptDate.getUTCHours() * 60 + apptDate.getUTCMinutes(); // Changed to UTC
                                     const gridStartMins = startHour * 60;
                                     const offsetMins = startMins - gridStartMins;
                                     const totalGridMins = (endHour - startHour) * 60;
@@ -195,7 +201,7 @@ export default function StaffPortal() {
                                             key={appt.id}
                                             className="absolute top-1 bottom-1 bg-primary/10 border-l-4 border-primary text-primary text-xs p-1 rounded-sm overflow-hidden whitespace-nowrap hover:z-10 hover:bg-primary/20 transition-colors cursor-pointer"
                                             style={{ left: `${left}%`, width: `${width}%` }}
-                                            title={`${format(apptDate, "h:mm a")} - ${appt.patient?.name || 'Patient'} (${appt.service?.name})`}
+                                            title={`${apptDate.toISOString().substr(11, 5)} - ${appt.patient?.name || 'Patient'} (${appt.service?.name})`}
                                         >
                                             <div className="font-bold truncate">{appt.patient?.name || 'Unknown Patient'}</div>
                                             <div className="truncate text-[10px] opacity-80">{appt.service?.name}</div>
